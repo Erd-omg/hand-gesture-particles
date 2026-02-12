@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>LuMuMemory</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; }
+        /* 核心修改：将相机方框置于最上层，并添加圆角阴影美化 */
+        #video-container { 
+            position: absolute; 
+            bottom: 20px; 
+            right: 20px; 
+            width: 200px; 
+            height: 150px; 
+            opacity: 0.8; 
+            border: 2px solid rgba(255,255,255,0.2); 
+            border-radius: 12px; 
+            overflow: hidden; 
+            transform: scaleX(-1); 
+            z-index: 999; /* 确保在粒子层之上 */
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        #webcam { width: 100%; height: 100%; object-fit: cover; }
+        #status { 
+            position: absolute; 
+            top: 20px; 
+            left: 20px; 
+            color: #fff; 
+            font-family: "Microsoft YaHei", sans-serif; 
+            pointer-events: none; 
+            z-index: 1000; 
+        }
+        .gesture-label { font-size: 24px; font-weight: bold; background: linear-gradient(to right, #C5DBFF, #F3AECA);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            filter: drop-shadow(0 0 8px rgba(197, 219, 255, 0.4)); }
+    </style>
+</head>
+<body>
+
+    <div id="status">
+        <div style="font-size: 14px; color: #ccc;">当前手势识别：</div>
+        <div><span id="gesture-name" class="gesture-label">准备中...</span></div>
+    </div>
+    
+    <div id="video-container">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+    <script>
+        const PARTICLE_COUNT = 8000; 
+        const SNOW_COUNT = 150;
+        let currentGesture = 'random';
+        const targets = { random: [], lumu1: [], lumu2: [], lumu3: [], lumu4: [], heart: [] };
+        
+        const colorPink = new THREE.Color("#F3AECA"); 
+        const colorBlue = new THREE.Color("#C5DBFF");
+
+        /** 1. Three.js 场景 **/
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(window.devicePixelRatio);
+        document.body.appendChild(renderer.domElement);
+
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(PARTICLE_COUNT * 3);
+        const colors = new Float32Array(PARTICLE_COUNT * 3);
+
+        for (let i = 0; i < PARTICLE_COUNT; i++) {
+            const x = (Math.random() - 0.5) * 40;
+            const y = (Math.random() - 0.5) * 40;
+            const z = (Math.random() - 0.5) * 10;
+            positions[i*3] = x; positions[i*3+1] = y; positions[i*3+2] = z;
+            const col = Math.random() > 0.5 ? colorPink : colorBlue;
+            colors[i*3] = col.r; colors[i*3+1] = col.g; colors[i*3+2] = col.b;
+            targets.random.push({ x, y, z });
+        }
+        
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        
+        const particleMaterial = new THREE.PointsMaterial({
+            size: 0.12, 
+            transparent: true,
+            opacity: 0.85,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            vertexColors: true
+        });
+        const particleSystem = new THREE.Points(geometry, particleMaterial);
+        scene.add(particleSystem);
+
+        const snowGeo = new THREE.BufferGeometry();
+        const snowPos = new Float32Array(SNOW_COUNT * 3);
+        for (let i = 0; i < SNOW_COUNT; i++) {
+            snowPos[i*3] = (Math.random() - 0.5) * 50;
+            snowPos[i*3+1] = Math.random() * 40 - 20;
+            snowPos[i*3+2] = (Math.random() - 0.5) * 20;
+        }
+        snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPos, 3));
+        const snowSystem = new THREE.Points(snowGeo, new THREE.PointsMaterial({ size: 0.05, color: 0xffffff, transparent: true, opacity: 0.3 }));
+        scene.add(snowSystem);
+
+        camera.position.z = 18;
+
+        /** 2. 图像采样 **/
+        async function sampleImage(url) {
+            return new Promise((resolve) => {
+                const img = new Image();
+                img.src = url;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    const res = 200; 
+                    canvas.width = res; canvas.height = res;
+                    const ratio = img.width / img.height;
+                    let dW = res, dH = res / ratio;
+                    if (ratio < 1) { dH = res; dW = res * ratio; }
+                    ctx.drawImage(img, (res-dW)/2, (res-dH)/2, dW, dH);
+                    const data = ctx.getImageData(0, 0, res, res).data;
+                    const pts = [];
+                    for (let y = 0; y < res; y++) {
+                        for (let x = 0; x < res; x++) {
+                            const i = (y * res + x) * 4;
+                            if (data[i+3] > 120 || (data[i]+data[i+1]+data[i+2])/3 > 50) {
+                                pts.push({ x: x - res/2, y: res/2 - y });
+                            }
+                        }
+                    }
+                    const result = [];
+                    for (let i = 0; i < PARTICLE_COUNT; i++) {
+                        const p = pts.length > 0 ? pts[Math.floor(Math.random() * pts.length)] : {x:0, y:0};
+                        result.push({ x: p.x * 0.1, y: p.y * 0.1, z: (Math.random() - 0.5) * 0.5 });
+                    }
+                    resolve(result);
+                };
+                img.onerror = () => resolve([...targets.random]);
+            });
+        }
+
+        /** 3. 手势识别逻辑 **/
+        const hands = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+
+        hands.onResults(results => {
+            const label = document.getElementById('gesture-name');
+            if (!results.multiHandLandmarks || results.multiHandLandmarks.length === 0) {
+                currentGesture = 'random';
+                label.innerText = "等待识别...";
+                return;
+            }
+            const lm = results.multiHandLandmarks;
+            if (lm.length === 2) {
+                const wristDist = Math.hypot(lm[0][0].x - lm[1][0].x, lm[0][0].y - lm[1][0].y);
+                const tipDist = Math.hypot(lm[0][8].x - lm[1][8].x, lm[0][8].y - lm[1][8].y);
+                if (wristDist < 0.15) { currentGesture = 'lumu1'; label.innerText = "交叉"; }
+                else if (tipDist < 0.15) { currentGesture = 'lumu3'; label.innerText = "比心"; }
+                else { currentGesture = 'lumu2'; label.innerText = "相框"; }
+            } else {
+                const isFist = lm[0][8].y > lm[0][6].y && lm[0][12].y > lm[0][10].y;
+                if (isFist) { currentGesture = 'heart'; label.innerText = "握拳"; }
+                else { currentGesture = 'lumu4'; label.innerText = "张开"; }
+            }
+        });
+
+        const videoElement = document.getElementById('webcam');
+        new Camera(videoElement, {
+            onFrame: async () => { await hands.send({ image: videoElement }); },
+            width: 640, height: 480
+        }).start();
+
+        /** 4. 核心修复：实心爱心生成算法 **/
+        async function init() {
+            targets.heart = (function() {
+                const pts = [];
+                let count = 0;
+                while (count < PARTICLE_COUNT) {
+                    // 扩大采样范围以适应放大1.5倍后的尺寸
+                    const tx = (Math.random() - 0.5) * 3.5; 
+                    const ty = (Math.random() - 0.5) * 3.5;
+                    
+                    // 标准爱心数学公式: (x^2 + y^2 - 1)^3 - x^2 * y^3 = 0
+                    // 调整 y 的偏移使顶部更圆润
+                    const x = tx;
+                    const y = ty + 0.2; 
+                    const equation = Math.pow(x*x + y*y - 1, 3) - x*x * Math.pow(y, 3);
+                    
+                    if (equation <= 0) {
+                        // 放大倍率应用：原本比例基础上放大1.5倍
+                        pts.push({ 
+                            x: tx * 4.5, 
+                            y: ty * 4.5, 
+                            z: (Math.random() - 0.5) * 1.5 
+                        });
+                        count++;
+                    }
+                }
+                return pts;
+            })();
+
+            const imgs = await Promise.all([
+                sampleImage('lumu1.png'), sampleImage('lumu2.png'),
+                sampleImage('lumu3.png'), sampleImage('lumu4.png')
+            ]);
+            targets.lumu1 = imgs[0]; targets.lumu2 = imgs[1];
+            targets.lumu3 = imgs[2]; targets.lumu4 = imgs[3];
+
+            document.getElementById('gesture-name').innerText = "就绪";
+            animate();
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const time = performance.now() * 0.001;
+            const posAttr = particleSystem.geometry.attributes.position;
+            const targetData = targets[currentGesture] || targets.random;
+
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const i3 = i * 3;
+                let tx = targetData[i].x;
+                let ty = targetData[i].y;
+                let tz = targetData[i].z;
+
+                if (currentGesture === 'random') {
+                    tx += Math.sin(time + i * 0.1) * 0.4;
+                    ty += Math.cos(time + i * 0.1) * 0.4;
+                } else if (currentGesture === 'heart') {
+                    const s = 1 + Math.sin(time * 8) * 0.05;
+                    tx *= s; ty *= s;
+                }
+
+                posAttr.array[i3] += (tx - posAttr.array[i3]) * 0.12;
+                posAttr.array[i3+1] += (ty - posAttr.array[i3+1]) * 0.12;
+                posAttr.array[i3+2] += (tz - posAttr.array[i3+2]) * 0.12;
+            }
+            posAttr.needsUpdate = true;
+
+            const sPos = snowSystem.geometry.attributes.position;
+            for (let i = 0; i < SNOW_COUNT; i++) {
+                sPos.array[i*3+1] -= 0.04;
+                if (sPos.array[i*3+1] < -20) sPos.array[i*3+1] = 20;
+            }
+            sPos.needsUpdate = true;
+
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        init();
+    </script>
+</body>
+</html>
