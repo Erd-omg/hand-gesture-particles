@@ -5,7 +5,6 @@
     <title>LuMuMemory</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #000; }
-        /* 核心修改：将相机方框置于最上层，并添加圆角阴影美化 */
         #video-container { 
             position: absolute; 
             bottom: 20px; 
@@ -86,7 +85,7 @@
         geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
         
         const particleMaterial = new THREE.PointsMaterial({
-            size: 0.12, 
+            size: 0.15, // 单个粒子大小
             transparent: true,
             opacity: 0.85,
             blending: THREE.AdditiveBlending,
@@ -113,6 +112,7 @@
         async function sampleImage(url) {
             return new Promise((resolve) => {
                 const img = new Image();
+                img.crossOrigin = "Anonymous";
                 img.src = url;
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
@@ -175,13 +175,12 @@
             width: 640, height: 480
         }).start();
 
-        /** 4. 核心修复：实心爱心生成算法 **/
+        /** 实心爱心生成算法 **/
         async function init() {
             targets.heart = (function() {
                 const pts = [];
                 let count = 0;
-                while (count < PARTICLE_COUNT) {
-                    // 扩大采样范围以适应放大1.5倍后的尺寸
+                while (count < PARTICLE_COUNT) 
                     const tx = (Math.random() - 0.5) * 3.5; 
                     const ty = (Math.random() - 0.5) * 3.5;
                     
